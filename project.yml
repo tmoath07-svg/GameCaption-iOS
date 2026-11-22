@@ -16,9 +16,14 @@ targets:
     platform: iOS
     sources:
       - path: GameCaption
+        excludes: [GameCaption.entitlements]
+    dependencies:
+      - target: GameCaptionBroadcast
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tmoath07.gamecaption
+        CODE_SIGN_ENTITLEMENTS: GameCaption/GameCaption.entitlements
         PRODUCT_NAME: GameCaption
         GENERATE_INFOPLIST_FILE: 'YES'
         INFOPLIST_KEY_CFBundleDisplayName: 'GameCaption'
@@ -39,6 +44,29 @@ targets:
     scheme:
       testTargets:
         - GameCaptionTests
+  GameCaptionBroadcast:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: GameCaptionBroadcast
+        excludes: [GameCaptionBroadcast.entitlements]
+    info:
+      path: GameCaptionBroadcast/Info.plist
+      properties:
+        CFBundleDisplayName: 'GameCaption Capture'
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
+          NSExtensionPrincipalClass: '$(PRODUCT_MODULE_NAME).SampleHandler'
+          NSExtensionAttributes:
+            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tmoath07.gamecaption.BroadcastExtension
+        CODE_SIGN_ENTITLEMENTS: GameCaptionBroadcast/GameCaptionBroadcast.entitlements
+        APPLICATION_EXTENSION_API_ONLY: 'YES'
+        IPHONEOS_DEPLOYMENT_TARGET: '18.0'
+        TARGETED_DEVICE_FAMILY: '1'
+        CODE_SIGN_STYLE: Manual
   GameCaptionTests:
     type: bundle.unit-test
     platform: iOS
