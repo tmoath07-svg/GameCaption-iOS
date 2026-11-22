@@ -1,7 +1,7 @@
 name: Build and verify GameCaption IPA
 on:
   push:
-    branches: [main, 'feature/replaykit-screen-captions']
+    branches: [main, 'feature/replaykit-screen-captions', 'feature/offline-arabic-neural-tts']
   pull_request:
     branches: [main]
   workflow_dispatch:
