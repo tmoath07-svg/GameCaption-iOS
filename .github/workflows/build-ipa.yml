@@ -1,7 +1,7 @@
 name: Build and verify GameCaption IPA
 on:
   push:
-    branches: [main, 'feature/replaykit-screen-captions', 'feature/offline-arabic-neural-tts']
+    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -53,21 +53,18 @@ jobs:
           EXT="$APP/PlugIns/GameCaptionBroadcast.appex"
           test -f "$EXT/Info.plist"
           test -f "$EXT/GameCaptionBroadcast"
-          test -f "$APP/NeuralArabicVoice/model.int8.onnx"
-          test -f "$APP/NeuralArabicVoice/model.fp16.onnx"
-          test -f "$APP/NeuralArabicVoice/voices.bin"
-          test -f "$APP/NeuralArabicVoice/tokens.txt"
-          test -f "$APP/NeuralArabicVoice/espeak-ng-data/phontab"
           test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT/Info.plist")" = 'com.apple.broadcast-services-upload'
           mkdir -p Payload
           ditto "$APP" Payload/GameCaption.app
-          zip -q -r GameCaption-0.4.0-unsigned.ipa Payload
-          python3 scripts/validate_source.py GameCaption-0.4.0-unsigned.ipa
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")
+          IPA="GameCaption-${VERSION}-unsigned.ipa"
+          zip -q -r "$IPA" Payload
+          python3 scripts/validate_source.py "$IPA"
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: GameCaption-iPhone-unsigned-IPA
-          path: GameCaption-0.4.0-unsigned.ipa
+          path: GameCaption-*-unsigned.ipa
           retention-days: 30
           if-no-files-found: error
       - name: Run unit tests on available iPhone simulator
@@ -75,11 +72,20 @@ jobs:
         run: |
           set -euo pipefail
           SIM_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; ids=[x["udid"] for xs in d.values() for x in xs if "iPhone" in x["name"] and x["state"]=="Shutdown"]; print(ids[0] if ids else "")')
-          if [ -z "$SIM_ID" ]; then
-            echo "::warning::No iPhone simulator runtime available; simulator compilation already passed."
-          else
-            echo "Testing with simulator $SIM_ID"
-            xcodebuild -project GameCaption.xcodeproj -scheme GameCaption \
-              -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
-              CODE_SIGNING_ALLOWED=NO test > "$RUNNER_TEMP/unit-tests.log" 2>&1 || { cat "$RUNNER_TEMP/unit-tests.log"; exit 1; }
-          fi
+          test -n "$SIM_ID" || { echo "::error::No iPhone simulator runtime is available"; exit 1; }
+          xcodebuild -project GameCaption.xcodeproj -scheme GameCaption \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -resultBundlePath "$RUNNER_TEMP/GameCaptionTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO test > "$RUNNER_TEMP/unit-tests.log" 2>&1 || { cat "$RUNNER_TEMP/unit-tests.log"; exit 1; }
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/GameCaptionTests.xcresult" \
+            | tee "$RUNNER_TEMP/test-summary.json"
+          python3 -c 'import json,sys; summary=json.load(open(sys.argv[1])); assert summary["passedTests"] > 0 and summary["failedTests"] == 0' "$RUNNER_TEMP/test-summary.json"
+      - name: Upload simulator test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GameCaption-simulator-tests
+          path: |
+            ${{ runner.temp }}/GameCaptionTests.xcresult
+            ${{ runner.temp }}/unit-tests.log
+            ${{ runner.temp }}/test-summary.json

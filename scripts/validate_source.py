@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Basic license/hygiene/packaging checks, not a substitute for Xcode compilation."""
 from pathlib import Path
-import plistlib, sys, zipfile
+import plistlib, re, struct, sys, zipfile
 root=Path(__file__).resolve().parent.parent
-code=list((root/'GameCaption').glob('*.swift'))
+code = [file for folder in ('GameCaption', 'GameCaptionBroadcast', 'Shared')
+        for file in (root / folder).glob('*.swift')]
+project = (root / 'project.yml').read_text()
+versions = re.findall(r"^ +MARKETING_VERSION: '([0-9.]+)'$", project, re.M)
+assert len(versions) == 2 and versions[0] == versions[1], 'app and extension marketing versions differ'
+version = versions[0]
 assert len(code)>=6, 'missing source modules'
 required=['ContentView.swift','OCRService.swift','GameCaptionApp.swift',
           'LiveCameraScanner.swift','LiveSpeechRecognizer.swift','LocalCaptionServer.swift','CaptionStore.swift']
@@ -20,9 +25,10 @@ assert not list(root.rglob('GameDictionaries.bin')), 'reference dictionary inclu
 assert (root/'GameCaption/Assets.xcassets/AppIcon.appiconset/icon-1024.png').is_file()
 assert (root/'GameCaptionBroadcast/SampleHandler.swift').is_file(), 'ReplayKit broadcast handler missing'
 for entitlement in ('GameCaption/GameCaption.entitlements', 'GameCaptionBroadcast/GameCaptionBroadcast.entitlements'):
+    assert f'CODE_SIGN_ENTITLEMENTS: {entitlement}' in project, entitlement
     with (root / entitlement).open('rb') as f:
         ent = plistlib.load(f)
-    assert 'group.com.tmoath07.gamecaption' in ent.get('com.apple.security.application-groups', []), entitlement
+    assert ent.get('com.apple.security.application-groups') == ['group.com.tmoath07.gamecaption'], entitlement
 print('PASS: independent source hygiene, file inventory and icon present')
 if len(sys.argv)==2:
     ipa=Path(sys.argv[1]); assert ipa.is_file(), 'IPA missing'
@@ -33,13 +39,25 @@ if len(sys.argv)==2:
         assert app+'Info.plist' in entries, 'Info.plist not found'
         info=plistlib.loads(z.read(app+'Info.plist'))
         assert info.get('CFBundleIdentifier')=='com.tmoath07.gamecaption', info.get('CFBundleIdentifier')
-        assert info.get('CFBundleShortVersionString')=='0.4.0', 'wrong version'
+        assert info.get('CFBundleShortVersionString') == version, 'wrong version'
+        assert ipa.name == f'GameCaption-{version}-unsigned.ipa', 'wrong filename'
+        assert app+'Assets.car' in entries, 'compiled asset catalog missing'
         assert info.get('UIDeviceFamily')==[1], 'app is not iPhone only'
-        assert any(p.startswith(app) and p.endswith('/GameCaption') for p in entries) or app+'GameCaption' in entries, 'executable missing'
         ext=app+'PlugIns/GameCaptionBroadcast.appex/'
         assert ext+'Info.plist' in entries, 'embedded ReplayKit extension missing'
-        assert ext+'GameCaptionBroadcast' in entries, 'ReplayKit executable missing'
         extinfo=plistlib.loads(z.read(ext+'Info.plist'))
+        assert extinfo['CFBundleIdentifier'] == 'com.tmoath07.gamecaption.BroadcastExtension'
+        assert extinfo['CFBundleShortVersionString'] == version
+        assert extinfo['CFBundleVersion'] == info['CFBundleVersion']
+        assert extinfo['UIDeviceFamily'] == [1]
+        assert extinfo['NSExtension']['NSExtensionPrincipalClass'] == 'GameCaptionBroadcast.SampleHandler'
+        for path, metadata in ((app, info), (ext, extinfo)):
+            assert path + 'embedded.mobileprovision' not in entries, 'unexpected provisioning profile'
+            assert path + '_CodeSignature/CodeResources' not in entries, 'unexpected signature'
+            assert metadata['CFBundleSupportedPlatforms'] == ['iPhoneOS'], 'device build required'
+            with z.open(path + metadata['CFBundleExecutable']) as executable:
+                magic, cpu = struct.unpack('<II', executable.read(8))
+                assert magic == 0xfeedfacf and cpu == 0x0100000c, 'arm64 Mach-O required'
         assert extinfo['NSExtension']['NSExtensionPointIdentifier']=='com.apple.broadcast-services-upload', 'wrong ReplayKit extension point'
         voice = app + 'NeuralArabicVoice/'
         for filename, minimum in [('model.int8.onnx', 50_000_000),
