@@ -3,11 +3,13 @@ import PhotosUI
 import Translation
 import UniformTypeIdentifiers
 import AVFoundation
+import Combine
 
 private enum InputMode: String, CaseIterable, Identifiable {
     case photo = "صورة"
     case camera = "كاميرا"
     case speech = "صوت"
+    case screen = "شاشة"
     case text = "نص"
     var id: String { rawValue }
     var symbol: String {
@@ -15,6 +17,7 @@ private enum InputMode: String, CaseIterable, Identifiable {
         case .photo: return "photo.on.rectangle"
         case .camera: return "camera.viewfinder"
         case .speech: return "waveform"
+        case .screen: return "rectangle.on.rectangle"
         case .text: return "text.alignleft"
         }
     }
@@ -25,6 +28,7 @@ struct ContentView: View {
     @StateObject private var camera = LiveCameraScanner()
     @StateObject private var speech = LiveSpeechRecognizer()
     @StateObject private var screenServer = LocalCaptionServer()
+    @StateObject private var broadcastCapture = BroadcastCaptureStore()
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingFileImporter = false
     @State private var mode: InputMode = .photo
@@ -89,6 +93,25 @@ struct ContentView: View {
                 case .failure(let error): errorMessage = error.localizedDescription
                 }
             }
+            .onAppear {
+                broadcastCapture.configure(source: sourceCode, target: targetCode)
+                broadcastCapture.refresh()
+            }
+            .onReceive(Timer.publish(every: 1.2, on: .main, in: .common).autoconnect()) { _ in
+                guard mode == .screen else { return }
+                let oldRevision = broadcastCapture.revision
+                broadcastCapture.refresh()
+                if broadcastCapture.revision != oldRevision, !broadcastCapture.recognizedText.isEmpty {
+                    sourceText = broadcastCapture.recognizedText
+                    translatedText = broadcastCapture.translatedText
+                }
+                if !broadcastCapture.translatedText.isEmpty, broadcastCapture.translatedText != translatedText {
+                    translatedText = broadcastCapture.translatedText
+                    screenServer.subtitle = translatedText
+                    store.add(source: sourceText, result: translatedText,
+                              sourceLanguage: sourceCode, targetLanguage: targetCode)
+                }
+            }
             .onChange(of: selectedPhoto) { _, photo in
                 guard let photo else { return }
                 Task { await readPhoto(photo) }
@@ -108,9 +131,11 @@ struct ContentView: View {
             }
             .onChange(of: sourceCode) { _, _ in
                 if speech.isListening { speech.stop() }
+                broadcastCapture.configure(source: sourceCode, target: targetCode)
             }
             .onChange(of: targetCode) { _, _ in
-                if !sourceText.isEmpty && autoTranslate { requestTranslation() }
+                broadcastCapture.configure(source: sourceCode, target: targetCode)
+                if !sourceText.isEmpty && autoTranslate, mode != .screen { requestTranslation() }
             }
             .onDisappear {
                 camera.stop()
@@ -242,6 +267,20 @@ struct ContentView: View {
                 Text(speech.statusText).font(.caption).foregroundStyle(.white.opacity(0.65))
                 Text("يستمع لميكروفون الآيفون فقط، وليس صوت Xbox الداخلي.")
                     .font(.caption).foregroundStyle(.white.opacity(0.65))
+            case .screen:
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("التقط النص من تطبيق Remote Play على الآيفون بعد بدء بث الشاشة بموافقتك.")
+                        .font(.subheadline)
+                    ScreenBroadcastPicker()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 58)
+                    Text(broadcastCapture.statusText)
+                        .font(.caption).foregroundStyle(.white.opacity(0.76))
+                    Text("الترجمة أثناء استخدام تطبيق آخر تتطلب iOS 26+، وتنزيل لغات Apple مسبقًا، وتوقيع App Groups للإضافة. بعض التطبيقات تحمي عرض الفيديو من الالتقاط.")
+                        .font(.caption).foregroundStyle(.white.opacity(0.6))
+                    Text("لا يوفر هذا اتصال Xbox/PS مباشرًا ولا طبقة ترجمة فوق HDMI؛ بث الشاشة لا يبدأ تلقائيًا.")
+                        .font(.caption).foregroundStyle(.white.opacity(0.6))
+                }
             case .text:
                 Text("اكتب النص مباشرة في المربع أدناه.")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.65))
@@ -388,7 +427,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("الخصوصية والحدود", systemImage: "hand.raised")
                 .font(.caption.bold())
-            Text("ما فيه حساب أو اشتراك. الصور والكاميرا تعالج محليًا بتقنيات Apple. ترجمة النظام قد تحتاج تنزيل لغات. عرض النص في متصفح التلفزيون ليس طبقة فوق صورة Xbox أو PS، ولا يوجد التقاط لبث الألعاب من تطبيق آخر.")
+            Text("ما فيه حساب أو اشتراك. الصور والكاميرا تعالج محليًا. بث شاشة التطبيقات الأخرى يحتاج إذن ReplayKit صريح، وقد تكون بعض الصور محمية من الالتقاط. لا توجد طبقة فوق HDMI أو اتصال Remote Play مباشر.")
                 .font(.caption)
         }
         .foregroundStyle(.white.opacity(0.6))
