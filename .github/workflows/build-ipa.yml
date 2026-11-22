@@ -1,6 +1,8 @@
 name: Build and verify GameCaption IPA
 on:
   push:
+    branches: [main, 'feature/replaykit-screen-captions']
+  pull_request:
     branches: [main]
   workflow_dispatch:
 permissions:
@@ -45,6 +47,10 @@ jobs:
           set -euo pipefail
           APP="$RUNNER_TEMP/GameCaptionBuild/Build/Products/Release-iphoneos/GameCaption.app"
           test -f "$APP/Info.plist"
+          EXT="$APP/PlugIns/GameCaptionBroadcast.appex"
+          test -f "$EXT/Info.plist"
+          test -f "$EXT/GameCaptionBroadcast"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT/Info.plist")" = 'com.apple.broadcast-services-upload'
           mkdir -p Payload
           ditto "$APP" Payload/GameCaption.app
           zip -q -r GameCaption-0.2.0-unsigned.ipa Payload
