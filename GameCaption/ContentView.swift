@@ -121,7 +121,10 @@ struct ContentView: View {
                 if mode == .camera { updateFromLiveSource(text) }
             }
             .onChange(of: camera.isRunning) { _, running in
-                UIApplication.shared.isIdleTimerDisabled = running
+                UIApplication.shared.isIdleTimerDisabled = running || screenServer.running
+            }
+            .onChange(of: screenServer.running) { _, running in
+                UIApplication.shared.isIdleTimerDisabled = running || camera.isRunning
             }
             .onChange(of: speech.transcript) { _, text in
                 if mode == .speech, !text.isEmpty { updateFromLiveSource(text, debounce: true) }
@@ -162,6 +165,8 @@ struct ContentView: View {
             .onDisappear {
                 camera.stop()
                 speech.stop()
+                screenServer.stop()
+                UIApplication.shared.isIdleTimerDisabled = false
                 invalidateTranslation()
             }
             .translationTask(translationConfiguration) { session in
@@ -498,7 +503,7 @@ struct ContentView: View {
                     Label("عرض الترجمة على جهاز آخر", systemImage: "tv")
                         .font(.title3.bold())
                     Text("شغّل الخدمة، ثم افتح الرابط في متصفح جهاز متصل بنفس شبكة Wi-Fi. بيظهر نص الترجمة ويتحدث تلقائيًا. الخدمة تعمل والآيفون مفتوح والتطبيق في المقدمة فقط.")
-                    Text("لا تدمج هذه الخدمة الترجمة فوق صورة اللعبة على مدخل HDMI؛ تحتاج الشاشة دعم صورة داخل صورة أو متصفح منفصل.")
+                    Text("استخدم جهازًا ثانيًا لعرض النص بجوار اللعبة، أو أضف الرابط الشفاف إلى OBS مع بطاقة التقاط HDMI.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button {
                         if screenServer.running { screenServer.stop() }
@@ -513,6 +518,10 @@ struct ContentView: View {
                         Text(screenServer.urlString).font(.callout.monospaced()).textSelection(.enabled)
                         Button { UIPasteboard.general.string = screenServer.urlString } label: {
                             Label("نسخ الرابط", systemImage: "doc.on.doc")
+                        }
+                        .buttonStyle(.bordered)
+                        Button { UIPasteboard.general.string = screenServer.overlayURLString } label: {
+                            Label("نسخ رابط OBS الشفاف", systemImage: "square.on.square")
                         }
                         .buttonStyle(.bordered)
                     }
