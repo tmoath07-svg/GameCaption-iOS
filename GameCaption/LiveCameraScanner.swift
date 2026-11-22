@@ -17,12 +17,15 @@ final class LiveCameraScanner: NSObject, ObservableObject, AVCaptureVideoDataOut
     private var frameRunID: UUID?
     private var lastProcessed = -Double.infinity
     private var changes = SubtitleChanges()
+    private var requestedSettings = CaptureSettings()
     private var settings = CaptureSettings()
     private var reportedOCRError = false
 
     func configure(_ settings: CaptureSettings) {
+        guard requestedSettings.source != settings.source || requestedSettings.region != settings.region else { return }
+        requestedSettings = settings
+        recognizedText = ""
         frameQueue.async {
-            guard self.settings.source != settings.source || self.settings.region != settings.region else { return }
             self.settings = settings
             self.changes = SubtitleChanges()
             self.lastProcessed = -.infinity

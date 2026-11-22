@@ -756,7 +756,11 @@ struct ContentView: View {
         }
         neuralVoice.stop()
         #endif
-        guard let voice = AVSpeechSynthesisVoice(language: targetCode) else {
+        let matchingVoice = AVSpeechSynthesisVoice(language: targetCode)
+            ?? AVSpeechSynthesisVoice.speechVoices().first {
+                Locale.Language(identifier: $0.language).languageCode?.identifier == targetCode
+            }
+        guard let voice = matchingVoice else {
             errorMessage = "لا يتوفر صوت لهذه اللغة. تحقق من الأصوات المثبتة في إعدادات الآيفون."
             return
         }

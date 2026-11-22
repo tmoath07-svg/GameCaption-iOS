@@ -1,5 +1,6 @@
 import UIKit
 import XCTest
+import Vision
 @testable import GameCaption
 
 final class SubtitlePipelineTests: XCTestCase {
@@ -21,15 +22,23 @@ final class SubtitlePipelineTests: XCTestCase {
         let image = UIGraphicsImageRenderer(size: size).image { context in
             UIColor.black.setFill()
             context.fill(CGRect(origin: .zero, size: size))
-            ("Press Start to continue" as NSString).draw(
-                at: CGPoint(x: 40, y: 140),
-                withAttributes: [.font: UIFont.systemFont(ofSize: 56, weight: .semibold),
-                                 .foregroundColor: UIColor.white]
-            )
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 54, weight: .semibold),
+                .foregroundColor: UIColor.white
+            ]
+            ("Options" as NSString).draw(at: CGPoint(x: 40, y: 12), withAttributes: attributes)
+            ("Press Start to continue" as NSString).draw(at: CGPoint(x: 40, y: 150), withAttributes: attributes)
         }
         let data = try XCTUnwrap(image.pngData())
-        let result = try await OCRService.importImage(data: data, language: "en")
-        XCTAssertEqual(result.text, "Press Start to continue")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).png")
+        try data.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let result = try await OCRService.importImage(url: file, language: "en")
+        XCTAssertEqual(result.text, "Options\nPress Start to continue")
+
+        let handler = VNImageRequestHandler(data: data, options: [:])
+        let subtitle = try OCRService.recognize(handler, region: SubtitleRegion(height: 0.45), language: "en-US")
+        XCTAssertEqual(subtitle, "Press Start to continue")
     }
 
     func testSubtitleRegionStaysInFrame() {
