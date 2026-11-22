@@ -21,6 +21,7 @@ final class LiveSpeechRecognizer: ObservableObject {
         let id = UUID()
         runID = id
         isStarting = true
+        transcript = ""
         SFSpeechRecognizer.requestAuthorization { [weak self] authorization in
             DispatchQueue.main.async {
                 guard let self, self.runID == id else { return }
