@@ -1,6 +1,8 @@
 name: Build and verify GameCaption IPA
 on:
   push:
+    branches: [main, 'feature/replaykit-screen-captions']
+  pull_request:
     branches: [main]
   workflow_dispatch:
 permissions:
@@ -45,15 +47,19 @@ jobs:
           set -euo pipefail
           APP="$RUNNER_TEMP/GameCaptionBuild/Build/Products/Release-iphoneos/GameCaption.app"
           test -f "$APP/Info.plist"
+          EXT="$APP/PlugIns/GameCaptionBroadcast.appex"
+          test -f "$EXT/Info.plist"
+          test -f "$EXT/GameCaptionBroadcast"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT/Info.plist")" = 'com.apple.broadcast-services-upload'
           mkdir -p Payload
           ditto "$APP" Payload/GameCaption.app
-          zip -q -r GameCaption-0.2.0-unsigned.ipa Payload
-          python3 scripts/validate_source.py GameCaption-0.2.0-unsigned.ipa
+          zip -q -r GameCaption-0.3.0-unsigned.ipa Payload
+          python3 scripts/validate_source.py GameCaption-0.3.0-unsigned.ipa
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: GameCaption-iPhone-unsigned-IPA
-          path: GameCaption-0.2.0-unsigned.ipa
+          path: GameCaption-0.3.0-unsigned.ipa
           retention-days: 30
           if-no-files-found: error
       - name: Run unit tests on available iPhone simulator

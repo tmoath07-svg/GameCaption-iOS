@@ -15,6 +15,11 @@ for file in code:
 assert not list(root.rglob('*.onnx')), 'reference-model weights included'
 assert not list(root.rglob('GameDictionaries.bin')), 'reference dictionary included'
 assert (root/'GameCaption/Assets.xcassets/AppIcon.appiconset/icon-1024.png').is_file()
+assert (root/'GameCaptionBroadcast/SampleHandler.swift').is_file(), 'ReplayKit broadcast handler missing'
+for entitlement in ('GameCaption/GameCaption.entitlements', 'GameCaptionBroadcast/GameCaptionBroadcast.entitlements'):
+    with (root / entitlement).open('rb') as f:
+        ent = plistlib.load(f)
+    assert 'group.com.tmoath07.gamecaption' in ent.get('com.apple.security.application-groups', []), entitlement
 print('PASS: independent source hygiene, file inventory and icon present')
 if len(sys.argv)==2:
     ipa=Path(sys.argv[1]); assert ipa.is_file(), 'IPA missing'
@@ -25,7 +30,13 @@ if len(sys.argv)==2:
         assert app+'Info.plist' in entries, 'Info.plist not found'
         info=plistlib.loads(z.read(app+'Info.plist'))
         assert info.get('CFBundleIdentifier')=='com.tmoath07.gamecaption', info.get('CFBundleIdentifier')
-        assert info.get('CFBundleShortVersionString')=='0.2.0', 'wrong version'
+        assert info.get('CFBundleShortVersionString')=='0.3.0', 'wrong version'
         assert info.get('UIDeviceFamily')==[1], 'app is not iPhone only'
         assert any(p.startswith(app) and p.endswith('/GameCaption') for p in entries) or app+'GameCaption' in entries, 'executable missing'
+        ext=app+'PlugIns/GameCaptionBroadcast.appex/'
+        assert ext+'Info.plist' in entries, 'embedded ReplayKit extension missing'
+        assert ext+'GameCaptionBroadcast' in entries, 'ReplayKit executable missing'
+        extinfo=plistlib.loads(z.read(ext+'Info.plist'))
+        assert extinfo['NSExtension']['NSExtensionPointIdentifier']=='com.apple.broadcast-services-upload', 'wrong ReplayKit extension point'
+        assert extinfo['NSExtension']['NSExtensionAttributes']['RPBroadcastProcessMode']=='RPBroadcastProcessModeSampleBuffer', 'missing sample buffer mode'
     print(f'PASS: {ipa.name}, file integrity, version and iPhone-only configuration')
