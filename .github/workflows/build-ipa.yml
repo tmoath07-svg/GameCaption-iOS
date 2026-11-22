@@ -5,10 +5,16 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      neural:
+        description: "Run the local INT8 developer smoke test instead of packaging the IPA"
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   build-and-validate:
+    if: github.event_name != 'workflow_dispatch' || !inputs.neural
     runs-on: macos-26
     timeout-minutes: 55
     steps:
@@ -86,3 +92,25 @@ jobs:
             ${{ runner.temp }}/GameCaptionTests.xcresult
             ${{ runner.temp }}/unit-tests.log
             ${{ runner.temp }}/test-summary.json
+  test-neural-developer-build:
+    if: github.event_name == 'workflow_dispatch' && inputs.neural
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare pinned INT8 developer build
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
+          python3 scripts/fetch_neural_voice.py
+          xcodegen generate --spec project-neural.yml
+      - name: Run Swift inference and WAV decode on an iPhone simulator
+        run: |
+          set -euo pipefail
+          SIM_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(x["udid"] for rows in json.load(sys.stdin)["devices"].values() for x in rows if "iPhone" in x["name"]))')
+          xcodebuild -project GameCaption.xcodeproj -scheme GameCaption \
+            -destination "platform=iOS Simulator,id=$SIM_ID" -only-testing:GameCaptionTests/NeuralVoiceTests \
+            -resultBundlePath "$RUNNER_TEMP/NeuralVoice.xcresult" CODE_SIGNING_ALLOWED=NO test \
+            > "$RUNNER_TEMP/neural-tests.log" 2>&1 || { cat "$RUNNER_TEMP/neural-tests.log"; exit 1; }
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/NeuralVoice.xcresult" \
+            | tee "$RUNNER_TEMP/neural-summary.json"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s["passedTests"] == 1 and s["failedTests"] == 0' "$RUNNER_TEMP/neural-summary.json"

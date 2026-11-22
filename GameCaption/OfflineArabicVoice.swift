@@ -96,7 +96,7 @@ final class OfflineArabicVoice: NSObject, ObservableObject, AVAudioPlayerDelegat
         var errorDescription: String? { "لم يتم إنشاء مقطع صوت صالح من النموذج." }
     }
 
-    nonisolated private static func generate(_ text: String, resources: URL) throws -> Data {
+    nonisolated static func generate(_ text: String, resources: URL) throws -> Data {
         let model = sherpaOnnxOfflineTtsKokoroModelConfig(
             model: resources.appendingPathComponent("model.int8.onnx").path,
             voices: resources.appendingPathComponent("voices.bin").path,

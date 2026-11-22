@@ -12,3 +12,7 @@ targets:
     dependencies:
       - package: SherpaOnnx
         product: sherpa-onnx
+  GameCaptionTests:
+    settings:
+      base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: '$(inherited) GAMECAPTION_NEURAL_VOICE'
