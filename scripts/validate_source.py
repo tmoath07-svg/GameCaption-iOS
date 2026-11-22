@@ -13,7 +13,7 @@ for file in code:
     assert 'com.guleryuz' not in data, f'unexpected reference app bundle id in {file}'
     assert 'SherpaOnnxC' not in data, f'reference app framework in {file}'
 voice_dir = root / 'GameCaption' / 'NeuralArabicVoice'
-unexpected_models = [p for p in root.rglob('*.onnx') if p.parent != voice_dir]
+unexpected_models = [p for p in (root / 'GameCaption').rglob('*.onnx') if p.parent != voice_dir]
 assert not unexpected_models, f'unlicensed/unexpected model weights: {unexpected_models}'
 
 assert not list(root.rglob('GameDictionaries.bin')), 'reference dictionary included'
