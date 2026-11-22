@@ -209,7 +209,7 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .accessibilityLabel("الصورة المحددة للترجمة")
                 }
-                if isReadingImage { ProgressView("جاري قراءة الصورة...").tint(.appAccent) }
+                if isReadingImage { ProgressView("جاري قراءة الصورة...").tint(Color.appAccent) }
             case .camera:
                 if camera.isRunning {
                     CameraPreview(session: camera.session)
@@ -225,7 +225,7 @@ struct ContentView: View {
                 HStack {
                     Text("منطقة الفحص").font(.caption)
                     Slider(value: $scanCrop, in: 0.4...1.0, step: 0.1) { Text("منطقة الفحص") }
-                        .tint(.appAccent)
+                        .tint(Color.appAccent)
                         .onChange(of: scanCrop) { _, value in camera.scanArea = value }
                 }
                 Button { camera.isRunning ? camera.stop() : camera.start() } label: {
@@ -272,7 +272,7 @@ struct ContentView: View {
                 .font(.caption)
             }
             .buttonStyle(.borderless)
-            .foregroundStyle(.appAccent)
+            .foregroundStyle(Color.appAccent)
         }
         .captionCard()
     }
@@ -289,13 +289,13 @@ struct ContentView: View {
                     if !sourceText.isEmpty { requestTranslation() }
                 } label: {
                     Image(systemName: "arrow.left.arrow.right")
-                        .font(.headline).foregroundStyle(.appAccent)
+                        .font(.headline).foregroundStyle(Color.appAccent)
                         .frame(width: 35, height: 45)
                 }.accessibilityLabel("تبديل اللغات")
                 languagePicker("إلى", selection: $targetCode)
             }
             Toggle("ترجمة تلقائية عند وصول نص جديد", isOn: $autoTranslate)
-                .font(.subheadline).tint(.appAccent)
+                .font(.subheadline).tint(Color.appAccent)
             Button { requestTranslation() } label: {
                 HStack {
                     Spacer()
@@ -322,7 +322,7 @@ struct ContentView: View {
                     Text(language.name).tag(language.code)
                 }
             }
-            .tint(.appAccent)
+            .tint(Color.appAccent)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
@@ -357,7 +357,7 @@ struct ContentView: View {
                 .disabled(translatedText.isEmpty)
             }
             .font(.caption.bold())
-            .foregroundStyle(.appAccent)
+            .foregroundStyle(Color.appAccent)
         }
         .captionCard()
     }
@@ -444,7 +444,7 @@ struct ContentView: View {
                         Label(screenServer.running ? "إيقاف المشاركة" : "بدء المشاركة", systemImage: screenServer.running ? "stop.fill" : "play.fill")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent).tint(.appAccent)
+                    .buttonStyle(.borderedProminent).tint(Color.appAccent)
                     if screenServer.running {
                         Text("الرابط:").font(.headline)
                         Text(screenServer.urlString).font(.callout.monospaced()).textSelection(.enabled)
@@ -548,10 +548,11 @@ struct ContentView: View {
         errorMessage = nil
         let source = Locale.Language(identifier: sourceCode)
         let target = Locale.Language(identifier: targetCode)
-        if let configuration = translationConfiguration {
+        if var configuration = translationConfiguration {
             configuration.source = source
             configuration.target = target
             configuration.invalidate()
+            translationConfiguration = configuration
         } else {
             translationConfiguration = TranslationSession.Configuration(source: source, target: target)
         }
