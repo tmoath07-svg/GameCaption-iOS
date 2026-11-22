@@ -80,12 +80,12 @@ final class OfflineArabicVoice: NSObject, ObservableObject, AVAudioPlayerDelegat
                 parts.append(String(rest.prefix(120)))
                 rest = rest.dropFirst(120)
             }
-            if current.count + rest.count + 1 > 120 {
+            if !current.isEmpty, current.count + rest.count + 1 > 120 {
                 parts.append(current)
                 current = ""
             }
             if !current.isEmpty { current += " " }
-            current += rest
+            current.append(contentsOf: rest)
         }
         if !current.isEmpty { parts.append(current) }
         return parts

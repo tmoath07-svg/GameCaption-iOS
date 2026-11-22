@@ -56,6 +56,7 @@ struct ContentView: View {
     @AppStorage("subtitleRegion.bottom") private var regionBottom = 0.0
     @AppStorage("subtitleRegion.height") private var regionHeight = 0.35
     @State private var displayedBroadcast: CaptureSnapshot?
+    @State private var restoredSettings: CaptureSettings?
     @State private var imageRequestID = UUID()
     @State private var errorMessage: String?
     @State private var offlineStatus: String?
@@ -129,18 +130,13 @@ struct ContentView: View {
             .onChange(of: speech.transcript) { _, text in
                 if mode == .speech, !text.isEmpty { updateFromLiveSource(text, debounce: true) }
             }
-            .onChange(of: mode) { _, newMode in
-                if newMode != .camera { camera.stop() }
-                if newMode != .speech { speech.stop() }
-                imageRequestID = UUID()
-                isReadingImage = false
-                displayedBroadcast = nil
-                clearCaption()
-                if newMode == .screen { syncBroadcast() }
-            }
             .onChange(of: captureSettings) { old, new in
                 if old.source != new.source { speech.stop() }
                 configureCapture()
+                if restoredSettings == new {
+                    restoredSettings = nil
+                    return
+                }
                 if mode == .screen {
                     displayedBroadcast = nil
                     clearCaption()
@@ -205,7 +201,7 @@ struct ContentView: View {
         HStack(spacing: 7) {
             ForEach(InputMode.allCases) { option in
                 Button {
-                    mode = option
+                    selectMode(option)
                 } label: {
                     VStack(spacing: 5) {
                         Image(systemName: option.symbol).font(.system(size: 18, weight: .semibold))
@@ -268,9 +264,13 @@ struct ContentView: View {
                 Text(camera.statusText)
                     .font(.caption).foregroundStyle(.white.opacity(0.65))
             case .speech:
-                Button { speech.isListening ? speech.stop() : speech.start(language: sourceCode) } label: {
-                    actionLabel(speech.isListening ? "إيقاف الاستماع" : "ترجمة الكلام من الميكروفون",
-                                icon: speech.isListening ? "stop.fill" : "mic.fill", isPrimary: true)
+                Button {
+                    if speech.isListening || speech.isStarting { speech.stop() }
+                    else { speech.start(language: sourceCode) }
+                } label: {
+                    let active = speech.isListening || speech.isStarting
+                    actionLabel(active ? "إيقاف الاستماع" : "ترجمة الكلام من الميكروفون",
+                                icon: active ? "stop.fill" : "mic.fill", isPrimary: true)
                 }
                 Text(speech.statusText).font(.caption).foregroundStyle(.white.opacity(0.65))
                 Text("يستمع لميكروفون الآيفون فقط، وليس صوت Xbox الداخلي.")
@@ -287,8 +287,12 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.white.opacity(0.76))
                     Text("الترجمة أثناء استخدام تطبيق آخر تتطلب iOS 26+، وتنزيل لغات Apple مسبقًا، وتوقيع App Groups للإضافة. بعض التطبيقات تحمي عرض الفيديو من الالتقاط.")
                         .font(.caption).foregroundStyle(.white.opacity(0.6))
-                    Text("لا يوفر هذا اتصال Xbox/PS مباشرًا ولا طبقة ترجمة فوق HDMI؛ بث الشاشة لا يبدأ تلقائيًا.")
-                        .font(.caption).foregroundStyle(.white.opacity(0.6))
+                    HStack {
+                        Link("دليل Xbox Remote Play", destination: URL(string: "https://www.xbox.com/en-US/consoles/remote-play")!)
+                        Spacer()
+                        Link("دليل PS Remote Play", destination: URL(string: "https://www.playstation.com/remote-play/")!)
+                    }
+                    .font(.caption).tint(Color.appAccent)
                 }
             case .text:
                 Text("اكتب النص مباشرة في المربع أدناه.")
@@ -471,9 +475,12 @@ struct ContentView: View {
                 } else {
                     ForEach(store.items) { item in
                         Button {
+                            selectMode(.text)
                             invalidateTranslation()
+                            let before = captureSettings
                             sourceCode = item.from
                             targetCode = item.to
+                            if before != captureSettings { restoredSettings = captureSettings }
                             sourceText = item.source
                             setCaption(item.translation)
                             showHistory = false
@@ -569,6 +576,18 @@ struct ContentView: View {
             }
         }
         .font(.caption).tint(Color.appAccent)
+    }
+
+    private func selectMode(_ newMode: InputMode) {
+        guard newMode != mode else { return }
+        mode = newMode
+        if newMode != .camera { camera.stop() }
+        if newMode != .speech { speech.stop() }
+        imageRequestID = UUID()
+        isReadingImage = false
+        displayedBroadcast = nil
+        clearCaption()
+        if newMode == .screen { syncBroadcast() }
     }
 
     private func configureCapture() {
