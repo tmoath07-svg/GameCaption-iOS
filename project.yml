@@ -10,10 +10,6 @@ settings:
     TARGETED_DEVICE_FAMILY: '1'
     SUPPORTS_MACCATALYST: 'NO'
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: 'NO'
-packages:
-  SherpaOnnx:
-    url: https://github.com/k2-fsa/sherpa-onnx
-    exactVersion: 1.13.8
 targets:
   GameCaption:
     type: application
@@ -22,11 +18,7 @@ targets:
       - path: GameCaption
         excludes: [GameCaption.entitlements, NeuralArabicVoice]
       - path: Shared
-      - path: GameCaption/NeuralArabicVoice
-        type: folder
     dependencies:
-      - package: SherpaOnnx
-        product: sherpa-onnx
       - target: GameCaptionBroadcast
         embed: true
     settings:

@@ -1,0 +1,14 @@
+# Local developer build. See Docs/OFFLINE-ARABIC-VOICE.md before redistribution.
+include: project.yml
+packages:
+  SherpaOnnx:
+    url: https://github.com/k2-fsa/sherpa-onnx
+    exactVersion: 1.13.8
+targets:
+  GameCaption:
+    sources:
+      - path: GameCaption/NeuralArabicVoice
+        type: folder
+    dependencies:
+      - package: SherpaOnnx
+        product: sherpa-onnx

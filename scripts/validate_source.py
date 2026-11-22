@@ -59,14 +59,7 @@ if len(sys.argv)==2:
                 magic, cpu = struct.unpack('<II', executable.read(8))
                 assert magic == 0xfeedfacf and cpu == 0x0100000c, 'arm64 Mach-O required'
         assert extinfo['NSExtension']['NSExtensionPointIdentifier']=='com.apple.broadcast-services-upload', 'wrong ReplayKit extension point'
-        voice = app + 'NeuralArabicVoice/'
-        for filename, minimum in [('model.int8.onnx', 50_000_000),
-                                  ('model.fp16.onnx', 120_000_000),
-                                  ('voices.bin', 100_000),
-                                  ('tokens.txt', 200)]:
-            path = voice + filename
-            assert path in entries, f'voice pack missing: {filename}'
-            assert z.getinfo(path).file_size > minimum, f'voice asset too small: {filename}'
-        assert voice + 'espeak-ng-data/phontab' in entries, 'phonemization tables missing'
+        assert not any(name.endswith(('.onnx', '/voices.bin')) or '/espeak-ng-data/' in name
+                       for name in entries), 'optional neural assets in public IPA'
         assert extinfo['NSExtension']['NSExtensionAttributes']['RPBroadcastProcessMode']=='RPBroadcastProcessModeSampleBuffer', 'missing sample buffer mode'
     print(f'PASS: {ipa.name}, file integrity, version and iPhone-only configuration')

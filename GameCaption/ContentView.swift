@@ -38,7 +38,10 @@ struct ContentView: View {
     @StateObject private var speech = LiveSpeechRecognizer()
     @StateObject private var screenServer = LocalCaptionServer()
     @StateObject private var broadcastCapture = BroadcastCaptureStore()
+    #if canImport(SherpaOnnx)
     @StateObject private var neuralVoice = OfflineArabicVoice()
+    @State private var useNeuralArabicVoice = false
+    #endif
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingFileImporter = false
     @State private var mode: InputMode = .photo
@@ -61,8 +64,6 @@ struct ContentView: View {
     @State private var translationRequest: TranslationRequest?
     @State private var delayedTranslation: Task<Void, Never>?
     @State private var photoPreview: UIImage?
-    @State private var useNeuralArabicVoice = true
-    @State private var voiceQuality: OfflineArabicVoice.Quality = .efficient
     @State private var speaker = AVSpeechSynthesizer()
 
     private struct LanguageOption: Identifiable {
@@ -394,21 +395,15 @@ struct ContentView: View {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange).font(.caption)
             }
+            #if canImport(SherpaOnnx)
             if targetCode == "ar" {
-                Toggle("نطق عربي عصبي محلي", isOn: $useNeuralArabicVoice)
+                Toggle("نطق عربي عصبي محلي (INT8)", isOn: $useNeuralArabicVoice)
                     .font(.caption).tint(Color.appAccent)
                 if useNeuralArabicVoice {
-                    Picker("جودة الصوت", selection: $voiceQuality) {
-                        ForEach(OfflineArabicVoice.Quality.allCases) { option in
-                            Text(option.rawValue).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    Text(neuralVoice.status)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.60))
+                    Text(neuralVoice.status).font(.caption2).foregroundStyle(.white.opacity(0.60))
                 }
             }
+            #endif
             Divider().overlay(.white.opacity(0.12))
             HStack(spacing: 18) {
                 Button {
@@ -720,13 +715,21 @@ struct ContentView: View {
     }
 
     private func speakTranslation() {
+        #if canImport(SherpaOnnx)
         if targetCode == "ar" && useNeuralArabicVoice {
-            neuralVoice.speak(translatedText, quality: voiceQuality)
+            speaker.stopSpeaking(at: .immediate)
+            neuralVoice.speak(translatedText)
+            return
+        }
+        neuralVoice.stop()
+        #endif
+        guard let voice = AVSpeechSynthesisVoice(language: targetCode) else {
+            errorMessage = "لا يتوفر صوت لهذه اللغة. تحقق من الأصوات المثبتة في إعدادات الآيفون."
             return
         }
         speaker.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: translatedText)
-        utterance.voice = AVSpeechSynthesisVoice(language: targetCode)
+        utterance.voice = voice
         utterance.rate = 0.48
         speaker.speak(utterance)
     }

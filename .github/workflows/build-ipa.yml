@@ -24,9 +24,6 @@ jobs:
         run: |
           if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
           xcodegen version
-      - name: Download independently licensed offline neural voice models
-        run: |
-          python3 scripts/fetch_neural_voice.py
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
       - name: Build iPhone simulator (compile check)
