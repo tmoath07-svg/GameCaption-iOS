@@ -110,7 +110,10 @@ struct ContentView: View {
                 case .failure(let error): errorMessage = error.localizedDescription
                 }
             }
-            .onAppear { configureCapture() }
+            .onAppear {
+                configureCapture()
+                broadcastCapture.setForeground(scenePhase != .background)
+            }
             .onReceive(Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()) { _ in
                 if mode == .screen, scenePhase == .active { syncBroadcast() }
             }
@@ -151,11 +154,13 @@ struct ContentView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background {
+                    broadcastCapture.setForeground(false)
                     camera.stop()
                     speech.stop()
                     screenServer.stop()
-                } else if phase == .active, mode == .screen {
-                    syncBroadcast()
+                } else if phase == .active {
+                    broadcastCapture.setForeground(true)
+                    if mode == .screen { syncBroadcast() }
                 }
             }
             .onDisappear {

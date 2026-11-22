@@ -34,6 +34,14 @@ struct BroadcastExchange {
         try write(settings, to: "capture-settings.json")
     }
 
+    func hostIsForeground() throws -> Bool {
+        try read("capture-foreground.json") ?? false
+    }
+
+    func writeHostForeground(_ foreground: Bool) throws {
+        try write(foreground, to: "capture-foreground.json")
+    }
+
     func snapshot() throws -> CaptureSnapshot? {
         try read("capture-snapshot.json")
     }

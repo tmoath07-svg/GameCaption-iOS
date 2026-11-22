@@ -20,6 +20,14 @@ final class BroadcastCaptureStore: ObservableObject {
         }
     }
 
+    func setForeground(_ foreground: Bool) {
+        do {
+            try exchange?.writeHostForeground(foreground)
+        } catch {
+            settingsError = "تعذر مشاركة حالة التطبيق: \(error.localizedDescription)"
+        }
+    }
+
     func refresh() -> CaptureSnapshot? {
         guard let exchange else { return nil }
         do {

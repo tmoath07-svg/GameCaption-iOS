@@ -75,6 +75,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
             if settings != snapshot.settings {
                 snapshot.settings = settings
                 clearCaption(status: "جاري البحث في منطقة النص...")
+                publish()
+            }
+            if (try? exchange?.hostIsForeground()) == true {
+                // Keep the last game caption available for review without reading GameCaption itself.
+                if Date().timeIntervalSince(snapshot.updated) >= 3 { publish() }
+                return
             }
 
             let attachment = CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString,
