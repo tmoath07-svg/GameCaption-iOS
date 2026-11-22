@@ -89,14 +89,15 @@ final class OfflineArabicVoice: ObservableObject {
         let config = sherpaOnnxOfflineTtsKokoroModelConfig(
             model: model, voices: voices, tokens: tokens, dataDir: dataDir
         )
-        let modelConfig = sherpaOnnxOfflineTtsModelConfig(numThreads: 2, kokoro: config)
+        let modelConfig = sherpaOnnxOfflineTtsModelConfig(kokoro: config, numThreads: 2)
         var ttsConfig = sherpaOnnxOfflineTtsConfig(model: modelConfig)
         let engine = SherpaOnnxOfflineTtsWrapper(config: &ttsConfig)
         let audio = engine.generate(text: text, sid: 0, speed: 1.0)
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("gamecaption-neural-\(UUID().uuidString).wav")
         _ = audio.save(filename: output.path)
-        guard (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber)?.intValue ?? 0 > 44 else {
+        let outputSize = (try? FileManager.default.attributesOfItem(atPath: output.path))?[.size] as? NSNumber
+        guard (outputSize?.intValue ?? 0) > 44 else {
             return .failure(VoiceError.outputMissing)
         }
         return .success(output)
