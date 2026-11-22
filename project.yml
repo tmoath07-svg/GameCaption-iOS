@@ -10,10 +10,6 @@ settings:
     TARGETED_DEVICE_FAMILY: '1'
     SUPPORTS_MACCATALYST: 'NO'
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: 'NO'
-packages:
-  SherpaOnnx:
-    url: https://github.com/k2-fsa/sherpa-onnx
-    exactVersion: 1.13.8
 targets:
   GameCaption:
     type: application
@@ -21,11 +17,8 @@ targets:
     sources:
       - path: GameCaption
         excludes: [GameCaption.entitlements, NeuralArabicVoice]
-      - path: GameCaption/NeuralArabicVoice
-        type: folder
+      - path: Shared
     dependencies:
-      - package: SherpaOnnx
-        product: sherpa-onnx
       - target: GameCaptionBroadcast
         embed: true
     settings:
@@ -45,8 +38,8 @@ targets:
         INFOPLIST_KEY_UIRequiresFullScreen: 'YES'
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         IPHONEOS_DEPLOYMENT_TARGET: '18.0'
-        MARKETING_VERSION: '0.4.0'
-        CURRENT_PROJECT_VERSION: '4'
+        MARKETING_VERSION: '0.5.0'
+        CURRENT_PROJECT_VERSION: '5'
         TARGETED_DEVICE_FAMILY: '1'
         CODE_SIGN_STYLE: Manual
     scheme:
@@ -58,10 +51,13 @@ targets:
     sources:
       - path: GameCaptionBroadcast
         excludes: [GameCaptionBroadcast.entitlements]
+      - path: Shared
     info:
       path: GameCaptionBroadcast/Info.plist
       properties:
         CFBundleDisplayName: 'GameCaption Capture'
+        CFBundleShortVersionString: '$(MARKETING_VERSION)'
+        CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
         NSExtension:
           NSExtensionPointIdentifier: com.apple.broadcast-services-upload
           NSExtensionPrincipalClass: '$(PRODUCT_MODULE_NAME).SampleHandler'
@@ -71,6 +67,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tmoath07.gamecaption.BroadcastExtension
         CODE_SIGN_ENTITLEMENTS: GameCaptionBroadcast/GameCaptionBroadcast.entitlements
+        MARKETING_VERSION: '0.5.0'
+        CURRENT_PROJECT_VERSION: '5'
         APPLICATION_EXTENSION_API_ONLY: 'YES'
         IPHONEOS_DEPLOYMENT_TARGET: '18.0'
         TARGETED_DEVICE_FAMILY: '1'

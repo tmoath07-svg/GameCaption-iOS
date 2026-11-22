@@ -24,12 +24,24 @@ private enum InputMode: String, CaseIterable, Identifiable {
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
+
+    private struct TranslationRequest: Equatable {
+        var id = UUID()
+        var text: String
+        var source: String
+        var target: String
+        var prepare = false
+    }
     @StateObject private var store = CaptionStore()
     @StateObject private var camera = LiveCameraScanner()
     @StateObject private var speech = LiveSpeechRecognizer()
     @StateObject private var screenServer = LocalCaptionServer()
     @StateObject private var broadcastCapture = BroadcastCaptureStore()
+    #if canImport(SherpaOnnx)
     @StateObject private var neuralVoice = OfflineArabicVoice()
+    @State private var useNeuralArabicVoice = false
+    #endif
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingFileImporter = false
     @State private var mode: InputMode = .photo
@@ -41,17 +53,19 @@ struct ContentView: View {
     @State private var isReadingImage = false
     @State private var isTranslating = false
     @State private var autoTranslate = true
-    @State private var scanCrop = 1.0
+    @AppStorage("subtitleRegion.bottom") private var regionBottom = 0.0
+    @AppStorage("subtitleRegion.height") private var regionHeight = 0.35
+    @State private var displayedBroadcast: CaptureSnapshot?
+    @State private var restoredSettings: CaptureSettings?
+    @State private var imageRequestID = UUID()
     @State private var errorMessage: String?
+    @State private var offlineStatus: String?
     @State private var showHistory = false
     @State private var showTV = false
-    @State private var translationRequestID = UUID()
+    @State private var translationRequest: TranslationRequest?
     @State private var delayedTranslation: Task<Void, Never>?
     @State private var photoPreview: UIImage?
-    @State private var speaking = false
-    @State private var useNeuralArabicVoice = true
-    @State private var voiceQuality: OfflineArabicVoice.Quality = .efficient
-    private let speaker = AVSpeechSynthesizer()
+    @State private var speaker = AVSpeechSynthesizer()
 
     private struct LanguageOption: Identifiable {
         let code: String
@@ -97,73 +111,67 @@ struct ContentView: View {
                 }
             }
             .onAppear {
-                broadcastCapture.configure(source: sourceCode, target: targetCode)
-                broadcastCapture.refresh()
+                configureCapture()
+                broadcastCapture.setForeground(scenePhase != .background)
             }
-            .onReceive(Timer.publish(every: 1.2, on: .main, in: .common).autoconnect()) { _ in
-                guard mode == .screen else { return }
-                let oldRevision = broadcastCapture.revision
-                broadcastCapture.refresh()
-                if broadcastCapture.revision != oldRevision, !broadcastCapture.recognizedText.isEmpty {
-                    sourceText = broadcastCapture.recognizedText
-                    translatedText = broadcastCapture.translatedText
-                }
-                if !broadcastCapture.translatedText.isEmpty, broadcastCapture.translatedText != translatedText {
-                    translatedText = broadcastCapture.translatedText
-                    screenServer.subtitle = translatedText
-                    store.add(source: sourceText, result: translatedText,
-                              sourceLanguage: sourceCode, targetLanguage: targetCode)
-                }
+            .onReceive(Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()) { _ in
+                if mode == .screen, scenePhase == .active { syncBroadcast() }
             }
             .onChange(of: selectedPhoto) { _, photo in
                 guard let photo else { return }
                 Task { await readPhoto(photo) }
             }
-            .onChange(of: camera.recognizedText) { _, newText in
-                guard mode == .camera, !newText.isEmpty else { return }
-                updateFromLiveSource(newText)
+            .onChange(of: camera.recognizedText) { _, text in
+                if mode == .camera { updateFromLiveSource(text) }
             }
-            .onChange(of: speech.transcript) { _, newText in
-                guard mode == .speech, !newText.isEmpty else { return }
-                updateFromLiveSource(newText)
+            .onChange(of: camera.isRunning) { _, running in
+                UIApplication.shared.isIdleTimerDisabled = running || screenServer.running
             }
-            .onChange(of: mode) { _, newMode in
-                if newMode != .camera { camera.stop() }
-                if newMode != .speech { speech.stop() }
-                errorMessage = nil
+            .onChange(of: screenServer.running) { _, running in
+                UIApplication.shared.isIdleTimerDisabled = running || camera.isRunning
             }
-            .onChange(of: sourceCode) { _, _ in
-                if speech.isListening { speech.stop() }
-                broadcastCapture.configure(source: sourceCode, target: targetCode)
+            .onChange(of: speech.transcript) { _, text in
+                if mode == .speech, !text.isEmpty { updateFromLiveSource(text, debounce: true) }
             }
-            .onChange(of: targetCode) { _, _ in
-                broadcastCapture.configure(source: sourceCode, target: targetCode)
-                if !sourceText.isEmpty && autoTranslate, mode != .screen { requestTranslation() }
+            .onChange(of: captureSettings) { old, new in
+                if old.source != new.source { speech.stop() }
+                configureCapture()
+                if restoredSettings == new {
+                    restoredSettings = nil
+                    return
+                }
+                if mode == .screen {
+                    displayedBroadcast = nil
+                    clearCaption()
+                    syncBroadcast()
+                } else if mode == .camera, old.region != new.region || old.source != new.source {
+                    clearCaption()
+                } else if old.source != new.source || old.target != new.target || old.translate != new.translate {
+                    invalidateTranslation()
+                    setCaption("")
+                    if autoTranslate, !sourceText.isEmpty { requestTranslation() }
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background {
+                    broadcastCapture.setForeground(false)
+                    camera.stop()
+                    speech.stop()
+                    screenServer.stop()
+                } else if phase == .active {
+                    broadcastCapture.setForeground(true)
+                    if mode == .screen { syncBroadcast() }
+                }
             }
             .onDisappear {
                 camera.stop()
                 speech.stop()
-                delayedTranslation?.cancel()
+                screenServer.stop()
+                UIApplication.shared.isIdleTimerDisabled = false
+                invalidateTranslation()
             }
             .translationTask(translationConfiguration) { session in
-                let input = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !input.isEmpty else { return }
-                let requestID = translationRequestID
-                do {
-                    let response = try await session.translate(input)
-                    guard translationRequestID == requestID else { return }
-                    let result = response.targetText
-                    translatedText = result
-                    screenServer.subtitle = result
-                    isTranslating = false
-                    errorMessage = nil
-                    store.add(source: input, result: result, sourceLanguage: sourceCode,
-                              targetLanguage: targetCode)
-                } catch {
-                    guard translationRequestID == requestID else { return }
-                    isTranslating = false
-                    errorMessage = "تعذرت الترجمة. تأكد من دعم اللغتين وتنزيل ملفات اللغة من iOS، ثم جرّب مجددًا. \(error.localizedDescription)"
-                }
+                await runTranslation(session)
             }
         }
         .preferredColorScheme(.dark)
@@ -198,7 +206,7 @@ struct ContentView: View {
         HStack(spacing: 7) {
             ForEach(InputMode.allCases) { option in
                 Button {
-                    mode = option
+                    selectMode(option)
                 } label: {
                     VStack(spacing: 5) {
                         Image(systemName: option.symbol).font(.system(size: 18, weight: .semibold))
@@ -250,22 +258,24 @@ struct ContentView: View {
                                 .padding(10)
                         }
                 }
-                HStack {
-                    Text("منطقة الفحص").font(.caption)
-                    Slider(value: $scanCrop, in: 0.4...1.0, step: 0.1) { Text("منطقة الفحص") }
-                        .tint(Color.appAccent)
-                        .onChange(of: scanCrop) { _, value in camera.scanArea = value }
-                }
-                Button { camera.isRunning ? camera.stop() : camera.start() } label: {
-                    actionLabel(camera.isRunning ? "إيقاف الكاميرا" : "بدء فحص الكاميرا",
+                regionControls
+                Button {
+                    if camera.isRunning || camera.isStarting { camera.stop() }
+                    else { camera.start() }
+                } label: {
+                    actionLabel(camera.isRunning || camera.isStarting ? "إيقاف الكاميرا" : "بدء فحص الكاميرا",
                                 icon: camera.isRunning ? "stop.fill" : "camera.fill", isPrimary: true)
                 }
                 Text(camera.statusText)
                     .font(.caption).foregroundStyle(.white.opacity(0.65))
             case .speech:
-                Button { speech.isListening ? speech.stop() : speech.start(language: sourceCode) } label: {
-                    actionLabel(speech.isListening ? "إيقاف الاستماع" : "ترجمة الكلام من الميكروفون",
-                                icon: speech.isListening ? "stop.fill" : "mic.fill", isPrimary: true)
+                Button {
+                    if speech.isListening || speech.isStarting { speech.stop() }
+                    else { speech.start(language: sourceCode) }
+                } label: {
+                    let active = speech.isListening || speech.isStarting
+                    actionLabel(active ? "إيقاف الاستماع" : "ترجمة الكلام من الميكروفون",
+                                icon: active ? "stop.fill" : "mic.fill", isPrimary: true)
                 }
                 Text(speech.statusText).font(.caption).foregroundStyle(.white.opacity(0.65))
                 Text("يستمع لميكروفون الآيفون فقط، وليس صوت Xbox الداخلي.")
@@ -274,21 +284,30 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("التقط النص من تطبيق Remote Play على الآيفون بعد بدء بث الشاشة بموافقتك.")
                         .font(.subheadline)
+                    regionControls
                     ScreenBroadcastPicker()
                         .frame(maxWidth: .infinity)
                         .frame(height: 58)
-                    Text(broadcastCapture.statusText)
+                    Text(broadcastCapture.settingsError ?? broadcastCapture.statusText)
                         .font(.caption).foregroundStyle(.white.opacity(0.76))
                     Text("الترجمة أثناء استخدام تطبيق آخر تتطلب iOS 26+، وتنزيل لغات Apple مسبقًا، وتوقيع App Groups للإضافة. بعض التطبيقات تحمي عرض الفيديو من الالتقاط.")
                         .font(.caption).foregroundStyle(.white.opacity(0.6))
-                    Text("لا يوفر هذا اتصال Xbox/PS مباشرًا ولا طبقة ترجمة فوق HDMI؛ بث الشاشة لا يبدأ تلقائيًا.")
-                        .font(.caption).foregroundStyle(.white.opacity(0.6))
+                    HStack {
+                        Link("دليل Xbox Remote Play", destination: URL(string: "https://www.xbox.com/en-US/consoles/remote-play")!)
+                        Spacer()
+                        Link("دليل PS Remote Play", destination: URL(string: "https://www.playstation.com/remote-play/")!)
+                    }
+                    .font(.caption).tint(Color.appAccent)
                 }
             case .text:
                 Text("اكتب النص مباشرة في المربع أدناه.")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.65))
             }
-            TextEditor(text: $sourceText)
+            TextEditor(text: Binding(get: { sourceText }, set: { value in
+                invalidateTranslation()
+                sourceText = value
+                setCaption("")
+            }))
                 .frame(minHeight: 120)
                 .scrollContentBackground(.hidden)
                 .padding(10)
@@ -303,7 +322,7 @@ struct ContentView: View {
                 }
                 .accessibilityLabel("النص الأصلي")
             HStack {
-                Button { sourceText = ""; translatedText = ""; screenServer.subtitle = "" } label: {
+                Button { clearCaption() } label: {
                     Label("مسح", systemImage: "trash")
                 }
                 .font(.caption)
@@ -328,7 +347,6 @@ struct ContentView: View {
                     let old = sourceCode
                     sourceCode = targetCode
                     targetCode = old
-                    if !sourceText.isEmpty { requestTranslation() }
                 } label: {
                     Image(systemName: "arrow.left.arrow.right")
                         .font(.headline).foregroundStyle(Color.appAccent)
@@ -352,6 +370,14 @@ struct ContentView: View {
                 .background(Color.appAccent, in: RoundedRectangle(cornerRadius: 14))
             }
             .disabled(sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isTranslating)
+            if mode == .screen {
+                Button("جهّز لغات الترجمة دون اتصال") { requestTranslation(prepare: true) }
+                    .font(.caption.bold()).tint(Color.appAccent)
+                    .disabled(isTranslating || sourceCode == targetCode)
+                if let offlineStatus {
+                    Text(offlineStatus).font(.caption).foregroundStyle(.white.opacity(0.75))
+                }
+            }
         }
         .captionCard()
     }
@@ -383,21 +409,15 @@ struct ContentView: View {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange).font(.caption)
             }
+            #if canImport(SherpaOnnx)
             if targetCode == "ar" {
-                Toggle("نطق عربي عصبي محلي", isOn: $useNeuralArabicVoice)
+                Toggle("نطق عربي عصبي محلي (INT8)", isOn: $useNeuralArabicVoice)
                     .font(.caption).tint(Color.appAccent)
                 if useNeuralArabicVoice {
-                    Picker("جودة الصوت", selection: $voiceQuality) {
-                        ForEach(OfflineArabicVoice.Quality.allCases) { option in
-                            Text(option.rawValue).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    Text(neuralVoice.status)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.60))
+                    Text(neuralVoice.status).font(.caption2).foregroundStyle(.white.opacity(0.60))
                 }
             }
+            #endif
             Divider().overlay(.white.opacity(0.12))
             HStack(spacing: 18) {
                 Button {
@@ -460,11 +480,14 @@ struct ContentView: View {
                 } else {
                     ForEach(store.items) { item in
                         Button {
-                            sourceText = item.source
-                            translatedText = item.translation
+                            selectMode(.text)
+                            invalidateTranslation()
+                            let before = captureSettings
                             sourceCode = item.from
                             targetCode = item.to
-                            screenServer.subtitle = item.translation
+                            if before != captureSettings { restoredSettings = captureSettings }
+                            sourceText = item.source
+                            setCaption(item.translation)
                             showHistory = false
                         } label: {
                             VStack(alignment: .leading, spacing: 7) {
@@ -492,7 +515,7 @@ struct ContentView: View {
                     Label("عرض الترجمة على جهاز آخر", systemImage: "tv")
                         .font(.title3.bold())
                     Text("شغّل الخدمة، ثم افتح الرابط في متصفح جهاز متصل بنفس شبكة Wi-Fi. بيظهر نص الترجمة ويتحدث تلقائيًا. الخدمة تعمل والآيفون مفتوح والتطبيق في المقدمة فقط.")
-                    Text("لا تدمج هذه الخدمة الترجمة فوق صورة اللعبة على مدخل HDMI؛ تحتاج الشاشة دعم صورة داخل صورة أو متصفح منفصل.")
+                    Text("استخدم جهازًا ثانيًا لعرض النص بجوار اللعبة، أو أضف الرابط الشفاف إلى OBS مع بطاقة التقاط HDMI.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button {
                         if screenServer.running { screenServer.stop() }
@@ -507,6 +530,10 @@ struct ContentView: View {
                         Text(screenServer.urlString).font(.callout.monospaced()).textSelection(.enabled)
                         Button { UIPasteboard.general.string = screenServer.urlString } label: {
                             Label("نسخ الرابط", systemImage: "doc.on.doc")
+                        }
+                        .buttonStyle(.bordered)
+                        Button { UIPasteboard.general.string = screenServer.overlayURLString } label: {
+                            Label("نسخ رابط OBS الشفاف", systemImage: "square.on.square")
                         }
                         .buttonStyle(.bordered)
                     }
@@ -537,72 +564,151 @@ struct ContentView: View {
                         in: RoundedRectangle(cornerRadius: 13))
     }
 
+    private var captureSettings: CaptureSettings {
+        CaptureSettings(source: sourceCode, target: targetCode, translate: autoTranslate,
+                        region: SubtitleRegion(bottom: regionBottom, height: regionHeight))
+    }
+
+    private var regionControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("منطقة النص").font(.caption.bold())
+            Slider(value: $regionHeight, in: 0.15...1, step: 0.05) { Text("ارتفاع المنطقة") }
+                .onChange(of: regionHeight) { _, height in regionBottom = min(regionBottom, 1 - height) }
+            Text("ارتفاع المنطقة: \(Int((regionHeight * 100).rounded()))٪")
+            if regionHeight < 1 {
+                Slider(value: $regionBottom, in: 0...(1 - regionHeight)) { Text("المسافة من أسفل الإطار") }
+                Text("من أسفل الإطار: \(Int((regionBottom * 100).rounded()))٪")
+            }
+        }
+        .font(.caption).tint(Color.appAccent)
+    }
+
+    private func selectMode(_ newMode: InputMode) {
+        guard newMode != mode else { return }
+        mode = newMode
+        if newMode != .camera { camera.stop() }
+        if newMode != .speech { speech.stop() }
+        imageRequestID = UUID()
+        isReadingImage = false
+        displayedBroadcast = nil
+        clearCaption()
+        if newMode == .screen { syncBroadcast() }
+    }
+
+    private func configureCapture() {
+        camera.configure(captureSettings)
+        broadcastCapture.configure(captureSettings)
+        offlineStatus = nil
+    }
+
+    private func syncBroadcast() {
+        guard let snapshot = broadcastCapture.refresh(), snapshot.settings == captureSettings else {
+            if displayedBroadcast != nil {
+                displayedBroadcast = nil
+                clearCaption()
+            }
+            return
+        }
+        guard snapshot.revision != displayedBroadcast?.revision ||
+              snapshot.translation != displayedBroadcast?.translation else { return }
+        displayedBroadcast = snapshot
+        invalidateTranslation()
+        sourceText = snapshot.source
+        setCaption(snapshot.translation)
+        if !snapshot.translation.isEmpty {
+            store.add(source: snapshot.source, result: snapshot.translation,
+                      sourceLanguage: snapshot.settings.source, targetLanguage: snapshot.settings.target)
+        }
+    }
+
     @MainActor
     private func readPhoto(_ photo: PhotosPickerItem) async {
-        isReadingImage = true
-        errorMessage = nil
-        defer { isReadingImage = false }
-        do {
+        let language = sourceCode
+        await importImage {
             guard let data = try await photo.loadTransferable(type: Data.self) else {
-                errorMessage = "ما قدرت أفتح الصورة."
-                return
+                throw CocoaError(.fileReadCorruptFile)
             }
-            try await processImageData(data)
-        } catch {
-            errorMessage = "فشل استخراج النص: \(error.localizedDescription)"
+            return try await OCRService.importImage(data: data, language: language)
         }
     }
 
     @MainActor
     private func readImageFile(_ url: URL) async {
-        isReadingImage = true
-        errorMessage = nil
-        defer { isReadingImage = false }
-        let permitted = url.startAccessingSecurityScopedResource()
-        defer { if permitted { url.stopAccessingSecurityScopedResource() } }
-        do {
-            let data = try Data(contentsOf: url, options: .mappedIfSafe)
-            try await processImageData(data)
-        } catch {
-            errorMessage = "تعذرت قراءة الملف: \(error.localizedDescription)"
-        }
+        let language = sourceCode
+        await importImage { try await OCRService.importImage(url: url, language: language) }
     }
 
     @MainActor
-    private func processImageData(_ data: Data) async throws {
-        photoPreview = UIImage(data: data)
-        let recognized = try await OCRService.recognizeText(in: data)
-        sourceText = recognized
-        translatedText = ""
-        if recognized.isEmpty { errorMessage = "ما لقينا نص واضح في الصورة." }
-        else if autoTranslate { requestTranslation() }
+    private func importImage(_ read: () async throws -> OCRService.ImportedImage) async {
+        guard mode == .photo else { return }
+        let id = UUID()
+        imageRequestID = id
+        isReadingImage = true
+        clearCaption()
+        photoPreview = nil
+        defer {
+            if imageRequestID == id { isReadingImage = false }
+        }
+        do {
+            let image = try await read()
+            guard imageRequestID == id else { return }
+            photoPreview = image.preview
+            sourceText = image.text
+            if image.text.isEmpty { errorMessage = "ما لقينا نص واضح في الصورة." }
+            else if autoTranslate { requestTranslation() }
+        } catch {
+            guard imageRequestID == id else { return }
+            errorMessage = "تعذرت قراءة الصورة: \(error.localizedDescription)"
+        }
     }
 
-    private func updateFromLiveSource(_ newText: String) {
-        guard newText != sourceText else { return }
-        sourceText = newText
-        guard autoTranslate else { return }
+    private func setCaption(_ text: String) {
+        translatedText = text
+        screenServer.subtitle = text
+    }
+
+    private func clearCaption() {
+        invalidateTranslation()
+        sourceText = ""
+        setCaption("")
+        errorMessage = nil
+    }
+
+    private func invalidateTranslation() {
         delayedTranslation?.cancel()
-        delayedTranslation = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(1400))
-            guard !Task.isCancelled else { return }
+        translationRequest = nil
+        isTranslating = false
+    }
+
+    private func updateFromLiveSource(_ newText: String, debounce: Bool = false) {
+        guard newText != sourceText else { return }
+        invalidateTranslation()
+        sourceText = newText
+        setCaption("")
+        errorMessage = nil
+        guard autoTranslate, !newText.isEmpty else { return }
+        if debounce {
+            delayedTranslation = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(650))
+                guard !Task.isCancelled else { return }
+                requestTranslation()
+            }
+        } else {
             requestTranslation()
         }
     }
 
-    private func requestTranslation() {
+    private func requestTranslation(prepare: Bool = false) {
+        invalidateTranslation()
         let input = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !input.isEmpty else { errorMessage = "أضف نص أولًا."; return }
-        guard sourceCode != targetCode else {
-            translatedText = input
-            screenServer.subtitle = input
-            isTranslating = false
-            errorMessage = nil
+        guard prepare || !input.isEmpty else { errorMessage = "أضف نص أولًا."; return }
+        errorMessage = nil
+        if sourceCode == targetCode {
+            setCaption(input)
             return
         }
-        translationRequestID = UUID()
+        translationRequest = TranslationRequest(text: input, source: sourceCode, target: targetCode, prepare: prepare)
         isTranslating = true
-        errorMessage = nil
         let source = Locale.Language(identifier: sourceCode)
         let target = Locale.Language(identifier: targetCode)
         if var configuration = translationConfiguration {
@@ -615,14 +721,52 @@ struct ContentView: View {
         }
     }
 
+    @MainActor
+    private func runTranslation(_ session: TranslationSession) async {
+        guard let request = translationRequest else { return }
+        defer {
+            if translationRequest == request { isTranslating = false }
+        }
+        do {
+            if request.prepare {
+                try await session.prepareTranslation()
+                guard translationRequest == request, !Task.isCancelled else { return }
+                offlineStatus = "لغتا الترجمة جاهزتان للاستخدام دون اتصال."
+            } else {
+                let response = try await session.translate(request.text)
+                guard translationRequest == request, !Task.isCancelled else { return }
+                let result = response.targetText
+                setCaption(result)
+                store.add(source: request.text, result: result,
+                          sourceLanguage: request.source, targetLanguage: request.target)
+            }
+        } catch {
+            guard translationRequest == request, !Task.isCancelled else { return }
+            if request.prepare { offlineStatus = nil }
+            errorMessage = "تعذرت الترجمة. تحقق من توفر الزوج اللغوي وملفات اللغة في iOS. \(error.localizedDescription)"
+        }
+    }
+
     private func speakTranslation() {
+        #if canImport(SherpaOnnx)
         if targetCode == "ar" && useNeuralArabicVoice {
-            neuralVoice.speak(translatedText, quality: voiceQuality)
+            speaker.stopSpeaking(at: .immediate)
+            neuralVoice.speak(translatedText)
+            return
+        }
+        neuralVoice.stop()
+        #endif
+        let matchingVoice = AVSpeechSynthesisVoice(language: targetCode)
+            ?? AVSpeechSynthesisVoice.speechVoices().first {
+                Locale.Language(identifier: $0.language).languageCode?.identifier == targetCode
+            }
+        guard let voice = matchingVoice else {
+            errorMessage = "لا يتوفر صوت لهذه اللغة. تحقق من الأصوات المثبتة في إعدادات الآيفون."
             return
         }
         speaker.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: translatedText)
-        utterance.voice = AVSpeechSynthesisVoice(language: targetCode)
+        utterance.voice = voice
         utterance.rate = 0.48
         speaker.speak(utterance)
     }

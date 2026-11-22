@@ -4,101 +4,191 @@ import Vision
 import Translation
 import CoreMedia
 import ImageIO
+import os
 
-/// System broadcast extension: OCR runs only after the user explicitly starts a ReplayKit broadcast.
-/// No raw frames are retained or transmitted to an external server.
 final class SampleHandler: RPBroadcastSampleHandler {
     private let worker = DispatchQueue(label: "com.tmoath07.gamecaption.broadcast.ocr", qos: .userInitiated)
-    private let suite = "group.com.tmoath07.gamecaption"
-    private var lastFrame = ProcessInfo.processInfo.systemUptime - 2.0
-    private var lastText = ""
-
-    private var defaults: UserDefaults? { UserDefaults(suiteName: suite) }
+    private let exchange = BroadcastExchange()
+    private let logger = Logger(subsystem: "com.tmoath07.gamecaption", category: "broadcast")
+    private var snapshot = CaptureSnapshot(active: false, settings: CaptureSettings())
+    private var changes = SubtitleChanges()
+    private var paused = false
+    private var lastFrame = -Double.infinity
+    private var translationTask: Task<Void, Never>?
+    private var inFlightRevision: UUID?
+    private var pending: CaptureSnapshot?
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
-        defaults?.set(true, forKey: "capture.active")
-        defaults?.set("", forKey: "capture.sourceText")
-        defaults?.set("", forKey: "capture.translatedText")
-        defaults?.set("البث شغّال؛ جاري البحث عن نصوص...", forKey: "capture.status")
-        lastText = ""
+        worker.sync {
+            guard exchange != nil else {
+                finishBroadcastWithError(NSError(
+                    domain: "com.tmoath07.gamecaption.broadcast", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "مجموعة التطبيق غير متاحة. تحقق من صلاحية App Groups."]
+                ))
+                return
+            }
+            snapshot = CaptureSnapshot(settings: readSettings(), status: "البث شغّال؛ جاري البحث عن نصوص...")
+            changes = SubtitleChanges()
+            paused = false
+            lastFrame = -.infinity
+            publish()
+        }
     }
 
     override func broadcastPaused() {
-        defaults?.set("البث متوقف مؤقتًا.", forKey: "capture.status")
+        worker.sync {
+            paused = true
+            clearCaption(status: "البث متوقف مؤقتًا.")
+            snapshot.active = false
+            publish()
+        }
     }
 
     override func broadcastResumed() {
-        defaults?.set("البث شغّال؛ جاري البحث عن نصوص...", forKey: "capture.status")
+        worker.sync {
+            paused = false
+            snapshot.active = true
+            snapshot.status = "البث شغّال؛ جاري البحث عن نصوص..."
+            lastFrame = -.infinity
+            publish()
+        }
     }
 
     override func broadcastFinished() {
-        defaults?.set(false, forKey: "capture.active")
-        defaults?.set("انتهى بث الشاشة.", forKey: "capture.status")
+        worker.sync {
+            snapshot.active = false
+            clearCaption(status: "انتهى بث الشاشة.")
+            publish()
+        }
     }
 
     override func processSampleBuffer(_ sampleBuffer: CMSampleBuffer, with type: RPSampleBufferType) {
-        guard type == .video, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastFrame >= 1.5 else { return }
-        lastFrame = now
+        guard type == .video else { return }
+        // ReplayKit owns the buffer. Sample synchronously so OCR can never enqueue frames.
+        worker.sync {
+            guard snapshot.active, !paused else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastFrame >= 0.70, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            lastFrame = now
 
-        worker.async { [weak self, pixelBuffer] in
-            guard let self else { return }
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
+            let settings = readSettings()
+            if settings != snapshot.settings {
+                snapshot.settings = settings
+                clearCaption(status: "جاري البحث في منطقة النص...")
+                publish()
+            }
+            if (try? exchange?.hostIsForeground()) == true {
+                // Keep the last game caption available for review without reading GameCaption itself.
+                if Date().timeIntervalSince(snapshot.updated) >= 3 { publish() }
+                return
+            }
+
+            let attachment = CMGetAttachment(sampleBuffer, key: RPVideoSampleOrientationKey as CFString,
+                                             attachmentModeOut: nil) as? NSNumber
+            let orientation = attachment.flatMap { CGImagePropertyOrientation(rawValue: $0.uint32Value) } ?? .up
             do {
-                let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-                try handler.perform([request])
-                let text = (request.results ?? [])
-                    .sorted { $0.boundingBox.midY > $1.boundingBox.midY }
-                    .compactMap { $0.topCandidates(1).first?.string }
-                    .joined(separator: "\n")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty, text != self.lastText else { return }
-                self.lastText = text
-                let revision = UUID().uuidString
-                self.defaults?.set(revision, forKey: "capture.revision")
-                self.defaults?.set(text, forKey: "capture.sourceText")
-                self.defaults?.set("", forKey: "capture.translatedText")
-                self.defaults?.set(Date().timeIntervalSince1970, forKey: "capture.updatedAt")
-
-                let source = self.defaults?.string(forKey: "capture.sourceLanguage") ?? "en"
-                let target = self.defaults?.string(forKey: "capture.targetLanguage") ?? "ar"
-                if source == target {
-                    self.defaults?.set(text, forKey: "capture.translatedText")
-                    self.defaults?.set("تم التعرف على النص.", forKey: "capture.status")
-                } else if #available(iOS 26.0, *) {
-                    self.translate(text, revision: revision, source: source, target: target)
-                } else {
-                    self.defaults?.set("تم التعرف على النص. الترجمة أثناء الخلفية تحتاج iOS 26 أو أحدث.", forKey: "capture.status")
+                let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: orientation, options: [:])
+                let text = try OCRService.recognize(handler, region: settings.region,
+                                                    language: OCRService.languageIdentifier(settings.source))
+                if let change = changes.update(text) {
+                    apply(change, settings: settings)
+                } else if Date().timeIntervalSince(snapshot.updated) >= 3 {
+                    publish()
                 }
             } catch {
-                self.defaults?.set("تعذر التعرف على النص: \(error.localizedDescription)", forKey: "capture.status")
+                clearCaption(status: "تعذر التعرف على النص: \(error.localizedDescription)")
+                publish()
             }
+        }
+    }
+
+    private func readSettings() -> CaptureSettings {
+        do {
+            return try exchange?.settings() ?? CaptureSettings()
+        } catch {
+            logger.error("Cannot read capture settings: \(error.localizedDescription, privacy: .public)")
+            return snapshot.settings
+        }
+    }
+
+    private func apply(_ text: String, settings: CaptureSettings) {
+        pending = nil
+        snapshot.revision = UUID()
+        snapshot.source = text
+        snapshot.translation = ""
+        if text.isEmpty {
+            snapshot.status = "البث شغّال؛ لا يوجد نص في المنطقة المحددة."
+        } else if !settings.translate {
+            snapshot.status = "تم التعرف على النص. الترجمة التلقائية متوقفة."
+        } else if settings.source == settings.target {
+            snapshot.translation = text
+            snapshot.status = "تم التعرف على النص."
+        } else if #available(iOS 26.0, *) {
+            snapshot.status = "جاري ترجمة النص أثناء البث..."
+            pending = snapshot
+            translateNext()
+        } else {
+            snapshot.status = "تم التعرف على النص. الترجمة أثناء البث تحتاج iOS 26 أو أحدث."
+        }
+        publish()
+    }
+
+    private func clearCaption(status: String) {
+        pending = nil
+        translationTask?.cancel()
+        changes = SubtitleChanges()
+        snapshot.revision = UUID()
+        snapshot.source = ""
+        snapshot.translation = ""
+        snapshot.status = status
+    }
+
+    private func publish() {
+        snapshot.updated = Date()
+        do {
+            try exchange?.writeSnapshot(snapshot)
+        } catch {
+            logger.error("Cannot write capture status: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     @available(iOS 26.0, *)
-    private func translate(_ text: String, revision: String, source: String, target: String) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+    private func translateNext() {
+        guard inFlightRevision == nil, let item = pending else { return }
+        pending = nil
+        inFlightRevision = item.revision
+        translationTask = Task { @MainActor [weak self] in
+            let session = TranslationSession(
+                installedSource: Locale.Language(identifier: item.settings.source),
+                target: Locale.Language(identifier: item.settings.target)
+            )
+            let result: Result<String, Error>
             do {
-                // Non-UI initializer does not download languages. The user must install them first.
-                let session = TranslationSession(
-                    installedSource: Locale.Language(identifier: source),
-                    target: Locale.Language(identifier: target)
-                )
-                let result = try await session.translate(text)
-                guard self.defaults?.string(forKey: "capture.revision") == revision else { return }
-                self.defaults?.set(result.targetText, forKey: "capture.translatedText")
-                self.defaults?.set("تمت الترجمة أثناء بث الشاشة.", forKey: "capture.status")
-                self.defaults?.set(Date().timeIntervalSince1970, forKey: "capture.updatedAt")
+                try Task.checkCancellation()
+                result = .success(try await session.translate(item.source).targetText)
             } catch {
-                guard self.defaults?.string(forKey: "capture.revision") == revision else { return }
-                self.defaults?.set("تعذر الترجمة. نزّل اللغتين من إعدادات ترجمة iOS ثم أعد المحاولة.", forKey: "capture.status")
+                result = .failure(error)
             }
+            guard let self else { return }
+            self.worker.async { self.complete(result, revision: item.revision) }
         }
+    }
+
+    @available(iOS 26.0, *)
+    private func complete(_ result: Result<String, Error>, revision: UUID) {
+        guard inFlightRevision == revision else { return }
+        inFlightRevision = nil
+        translationTask = nil
+        if snapshot.active, snapshot.revision == revision {
+            switch result {
+            case .success(let text):
+                snapshot.translation = text
+                snapshot.status = "تمت الترجمة أثناء بث الشاشة."
+            case .failure(let error):
+                snapshot.status = "تعذر الترجمة أثناء البث. جهّز اللغات داخل التطبيق. \(error.localizedDescription)"
+            }
+            publish()
+        }
+        translateNext()
     }
 }

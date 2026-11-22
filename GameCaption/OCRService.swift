@@ -1,22 +1,45 @@
 import Foundation
 import Vision
+import UIKit
+import ImageIO
 
-/// Recognizes text from a screenshot the user explicitly selected.
-/// No proprietary assets, model weights, or code are shipped with this app.
-enum OCRService {
-    static func recognizeText(in imageData: Data) async throws -> String {
+extension OCRService {
+    struct ImportedImage {
+        let preview: UIImage
+        let text: String
+    }
+
+    static func importImage(data: Data, language: String) async throws -> ImportedImage {
         try await Task.detached(priority: .userInitiated) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
-            let handler = VNImageRequestHandler(data: imageData, options: [:])
-            try handler.perform([request])
-            let rows = (request.results ?? []).sorted {
-                $0.boundingBox.midY > $1.boundingBox.midY
+            guard let image = CGImageSourceCreateWithData(data as CFData, nil) else {
+                throw CocoaError(.fileReadCorruptFile)
             }
-            return rows.compactMap { $0.topCandidates(1).first?.string }
-                .joined(separator: "\n")
+            return try scanImage(image, language: language)
         }.value
+    }
+
+    static func importImage(url: URL, language: String) async throws -> ImportedImage {
+        try await Task.detached(priority: .userInitiated) {
+            let permitted = url.startAccessingSecurityScopedResource()
+            defer { if permitted { url.stopAccessingSecurityScopedResource() } }
+            guard let image = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return try scanImage(image, language: language)
+        }.value
+    }
+
+    private static func scanImage(_ image: CGImageSource, language: String) throws -> ImportedImage {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 3000
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(image, 0, options as CFDictionary) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let text = try recognize(VNImageRequestHandler(cgImage: thumbnail, options: [:]),
+                                 language: languageIdentifier(language))
+        return ImportedImage(preview: UIImage(cgImage: thumbnail), text: text)
     }
 }

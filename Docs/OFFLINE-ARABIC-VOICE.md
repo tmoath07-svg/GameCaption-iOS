@@ -1,12 +1,11 @@
-# GameCaption offline Arabic neural voice (0.4.0)
+# Offline Arabic voice
 
-Source: [marwanelamami/nabra-82m-sherpa-onnx](https://huggingface.co/marwanelamami/nabra-82m-sherpa-onnx), Apache-2.0. Runtime: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), Apache-2.0.
+The public GameCaption IPA uses the free Apple speech synthesizer for Arabic and other supported languages. If the voice is unavailable, install a voice in iOS Settings. Translation and speech are separate. Translation uses Apple Translation's language packs, and spoken output uses the selected language's system voice.
 
-- The IPA build fetches official, publicly licensed INT8 (lower-memory) and FP16 (higher precision) voice weights. They are functional TTS assets, **not size-padding files**.
-- Swift's offline speech engine uses SherpaOnnx's Kokoro-compatible model interface to generate WAV audio on device, then plays it via AVAudioPlayer.
-- Arabic text is the only supported language of this neural voice. For other languages, the existing Apple AVSpeechSynthesizer stays available.
-- **This is speech output of translated text; it does not add Xbox/PS Remote Play protocols or draw on the television HDMI input.**
-- Heavy model inference and resource bundling must be tested on physical iPhones. CI's compile and IPA presence checks cannot establish actual voice quality or runtime memory stability.
-- The large IPA needs compatible signing of both app and ReplayKit extension, including the original App Group entitlement.
-- Voice weights are downloaded from public sources by scripts/fetch_neural_voice.py, not copied from Side Screen.
-- Model attribution: marwanelamami and Nabra-82M-v0.1; original license Apache 2.0; include attribution in derivative distributions.
+## Nabra developer build
+
+The Nabra-82M source and the sherpa-format weights are listed under Apache-2.0. The sherpa-onnx iOS package links the eSpeak NG phonemization dependency, which has separate GPL licensing terms. GameCaption's repository currently has no project-wide license covering redistribution of a combined binary. The GitHub release therefore uses only the system speech API. [Nabra base model](https://huggingface.co/oddadmix/Nabra-82M-v0.1) · [Sherpa model conversion](https://huggingface.co/marwanelamami/nabra-82m-sherpa-onnx) · [Pinned Sherpa eSpeak integration](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/cmake/espeak-ng-for-piper.cmake) · [eSpeak license](https://github.com/csukuangfj/espeak-ng/blob/ed530aa113046142eb5115cf2fc9157854d0ffe1/COPYING)
+
+For local development, run `python3 scripts/fetch_neural_voice.py` with Python 3.12 or later and generate the Xcode project using `xcodegen generate --spec project-neural.yml`. This build enables the optional Nabra INT8 toggle for Arabic. It verifies the model archive by SHA-256, processes long captions in chunks and keeps only one inference and audio playback segment active at a time. It drops the former FP16 option to reduce memory use. The optional `neural` GitHub Actions dispatch checks Swift model inference and WAV decoding on an iPhone simulator. Verify pause, stop, long captions and speaker output on a physical iPhone before relying on this build.
+
+A smoke test with sherpa-onnx 1.13.8 on Linux generated and decoded 75,600 samples at 24 kHz from both former v0.4.0 models. The test process used about 247 MiB peak RSS after INT8 and 530 MiB across the sequential INT8 and FP16 runs. The engine skipped two unsupported phoneme codepoints for the sample. These measurements describe desktop inference and WAV output. Playback and memory on the iPhone require device testing.
