@@ -1,0 +1,70 @@
+name: Publish GameCaption direct IPA download
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-direct-ipa.yml'
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Download previously verified GameCaption IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download 45056262555 --repo "$GITHUB_REPOSITORY" --name GameCaption-iPhone-unsigned-IPA --dir dist
+          ls -lh dist/
+      - name: Validate IPA bundle, neural models, and size
+        run: |
+          python3 - <<'PY'
+          import os, plistlib, zipfile
+          name='dist/GameCaption-0.4.0-unsigned.ipa'
+          assert os.path.isfile(name), 'Unsigned IPA missing'
+          size=os.path.getsize(name)
+          assert size >= 200_000_000, f'Unexpectedly small IPA: {size} bytes'
+          with zipfile.ZipFile(name) as f:
+              assert f.testzip() is None, 'IPA ZIP integrity failed'
+              root='Payload/GameCaption.app/'
+              info=plistlib.loads(f.read(root+'Info.plist'))
+              assert info['CFBundleIdentifier']=='com.tmoath07.gamecaption'
+              assert info['CFBundleShortVersionString']=='0.4.0'
+              assert info['UIDeviceFamily']==[1]
+              names=set(f.namelist())
+              for path in [
+                  'NeuralArabicVoice/model.int8.onnx',
+                  'NeuralArabicVoice/model.fp16.onnx',
+                  'NeuralArabicVoice/voices.bin',
+                  'NeuralArabicVoice/tokens.txt',
+                  'PlugIns/GameCaptionBroadcast.appex/Info.plist',
+              ]:
+                  assert root+path in names, f'Missing asset: {path}'
+          print(f'Validated GameCaption IPA, {size} bytes')
+          PY
+          sha256sum dist/GameCaption-0.4.0-unsigned.ipa | tee dist/SHA256SUMS.txt
+      - name: Publish stable direct download (GitHub Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'EOF'
+          GameCaption 0.4.0 - unsigned iPhone IPA.
+
+          Includes original GameCaption implementation, ReplayKit extension, and licensed
+          Nabra-82M Arabic neural voice weights (Apache-2.0).
+          This unsigned IPA requires appropriate signing and App Groups provisioning.
+          Hardware behavior and native Xbox/PlayStation/TV HDMI overlays are NOT validated
+          or implemented. No proprietary Side Screen binaries are included.
+          EOF
+          if gh release view v0.4.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v0.4.0 dist/GameCaption-0.4.0-unsigned.ipa dist/SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create v0.4.0 dist/GameCaption-0.4.0-unsigned.ipa dist/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title 'GameCaption 0.4.0 - iPhone unsigned IPA' --notes-file release-notes.md
+          fi
+          gh release view v0.4.0 --repo "$GITHUB_REPOSITORY" --json url,assets
