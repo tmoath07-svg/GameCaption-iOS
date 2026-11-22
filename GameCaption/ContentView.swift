@@ -29,6 +29,7 @@ struct ContentView: View {
     @StateObject private var speech = LiveSpeechRecognizer()
     @StateObject private var screenServer = LocalCaptionServer()
     @StateObject private var broadcastCapture = BroadcastCaptureStore()
+    @StateObject private var neuralVoice = OfflineArabicVoice()
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showingFileImporter = false
     @State private var mode: InputMode = .photo
@@ -48,6 +49,8 @@ struct ContentView: View {
     @State private var delayedTranslation: Task<Void, Never>?
     @State private var photoPreview: UIImage?
     @State private var speaking = false
+    @State private var useNeuralArabicVoice = true
+    @State private var voiceQuality: OfflineArabicVoice.Quality = .efficient
     private let speaker = AVSpeechSynthesizer()
 
     private struct LanguageOption: Identifiable {
@@ -380,6 +383,21 @@ struct ContentView: View {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange).font(.caption)
             }
+            if targetCode == "ar" {
+                Toggle("نطق عربي عصبي محلي", isOn: $useNeuralArabicVoice)
+                    .font(.caption).tint(Color.appAccent)
+                if useNeuralArabicVoice {
+                    Picker("جودة الصوت", selection: $voiceQuality) {
+                        ForEach(OfflineArabicVoice.Quality.allCases) { option in
+                            Text(option.rawValue).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text(neuralVoice.status)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.60))
+                }
+            }
             Divider().overlay(.white.opacity(0.12))
             HStack(spacing: 18) {
                 Button {
@@ -598,6 +616,10 @@ struct ContentView: View {
     }
 
     private func speakTranslation() {
+        if targetCode == "ar" && useNeuralArabicVoice {
+            neuralVoice.speak(translatedText, quality: voiceQuality)
+            return
+        }
         speaker.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: translatedText)
         utterance.voice = AVSpeechSynthesisVoice(language: targetCode)
