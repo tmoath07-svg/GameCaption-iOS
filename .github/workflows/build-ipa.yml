@@ -27,10 +27,10 @@ jobs:
       - name: Build iPhone simulator (compile check)
         run: |
           set -euo pipefail
-          xcodebuild -project GameCaption.xcodeproj -scheme GameCaption \
+          xcodebuild -quiet -project GameCaption.xcodeproj -scheme GameCaption \
             -configuration Debug -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build | tee "$RUNNER_TEMP/simulator-build.log" | tail -n 70
+            CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/simulator-build.log" 2>&1 || { cat "$RUNNER_TEMP/simulator-build.log"; exit 1; }
       - name: Run unit tests on available iPhone simulator
         run: |
           set -euo pipefail
@@ -41,7 +41,7 @@ jobs:
             echo "Testing with simulator $SIM_ID"
             xcodebuild -project GameCaption.xcodeproj -scheme GameCaption \
               -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
-              CODE_SIGNING_ALLOWED=NO test | tee "$RUNNER_TEMP/unit-tests.log" | tail -n 90
+              CODE_SIGNING_ALLOWED=NO test > "$RUNNER_TEMP/unit-tests.log" 2>&1 || { cat "$RUNNER_TEMP/unit-tests.log"; exit 1; }
           fi
       - name: Build unsigned iPhone application
         run: |
@@ -51,7 +51,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/GameCaptionBuild" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
-            build | tee "$RUNNER_TEMP/device-build.log" | tail -n 90
+            build > "$RUNNER_TEMP/device-build.log" 2>&1 || { cat "$RUNNER_TEMP/device-build.log"; exit 1; }
       - name: Package and verify unsigned IPA
         run: |
           set -euo pipefail
