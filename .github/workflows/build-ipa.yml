@@ -1,7 +1,7 @@
 name: Build and verify GameCaption IPA
 on:
   push:
-    branches: [main, 'feature/replaykit-screen-captions']
+    branches: [main, 'feature/replaykit-screen-captions', 'feature/offline-arabic-neural-tts']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -24,6 +24,9 @@ jobs:
         run: |
           if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; fi
           xcodegen version
+      - name: Download independently licensed offline neural voice models
+        run: |
+          python3 scripts/fetch_neural_voice.py
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
       - name: Build iPhone simulator (compile check)
@@ -50,16 +53,21 @@ jobs:
           EXT="$APP/PlugIns/GameCaptionBroadcast.appex"
           test -f "$EXT/Info.plist"
           test -f "$EXT/GameCaptionBroadcast"
+          test -f "$APP/NeuralArabicVoice/model.int8.onnx"
+          test -f "$APP/NeuralArabicVoice/model.fp16.onnx"
+          test -f "$APP/NeuralArabicVoice/voices.bin"
+          test -f "$APP/NeuralArabicVoice/tokens.txt"
+          test -f "$APP/NeuralArabicVoice/espeak-ng-data/phontab"
           test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT/Info.plist")" = 'com.apple.broadcast-services-upload'
           mkdir -p Payload
           ditto "$APP" Payload/GameCaption.app
-          zip -q -r GameCaption-0.3.0-unsigned.ipa Payload
-          python3 scripts/validate_source.py GameCaption-0.3.0-unsigned.ipa
+          zip -q -r GameCaption-0.4.0-unsigned.ipa Payload
+          python3 scripts/validate_source.py GameCaption-0.4.0-unsigned.ipa
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
           name: GameCaption-iPhone-unsigned-IPA
-          path: GameCaption-0.3.0-unsigned.ipa
+          path: GameCaption-0.4.0-unsigned.ipa
           retention-days: 30
           if-no-files-found: error
       - name: Run unit tests on available iPhone simulator
